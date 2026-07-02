@@ -29,8 +29,8 @@ DOWNLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 DOCUMENTS_FOLDER = Path("data") / "documentos"
 MDFE_AVERBAR_FOLDER = None
 
-BILL_PDF_MAX_ATTEMPTS = 3
-BILL_PDF_RETRY_DELAY_SECONDS = 10
+BILL_PDF_MAX_ATTEMPTS = 5
+BILL_PDF_RETRY_DELAY_SECONDS = 30
 API_UNAVAILABLE_STATUS_CODES = {500, 502, 503, 504}
 
 # Configuração básica de log
@@ -220,7 +220,8 @@ def _parse_email(payload: bytes, uid: bytes) -> EmailMessage | None:
 
 
 def _save_attachments(msg: EmailMessage, temp_dir: Path) -> tuple[Path | None, Path | None]:
-    '''Salva o primeiro XML e o primeiro PDF do email no diretório temporário.
+    '''
+    Salva o primeiro XML e o primeiro PDF do email no diretório temporário.
 
     Funciona para anexos enviados como `application/octet-stream` com `name=...`, 
     e também para anexos com filename normal.
@@ -300,11 +301,11 @@ def _archive_doc(
     nome: Optional[str] = None,
 
 ) -> Path:
-    '''Move XML (e PDF, se existir) para o diretório definitivo.
+    '''
+    Move XML (e PDF, se existir) para o diretório definitivo.
 
     Estrutura:
         data/documentos/<chave>/<kind>/<kind>_<numero>[_<nome>].(xml|pdf)
-
     Args:
         kind: "CTe" ou "MDFe".
         chave: Chave do documento.
@@ -315,7 +316,7 @@ def _archive_doc(
     Returns:
         Diretório final criado/atualizado.
     '''
-    doc_dir = DOCUMENTS_FOLDER / safe_filename(chave) / safe_filename(kind)
+    doc_dir = DOCUMENTS_FOLDER / safe_filename(chave)
     doc_dir.mkdir(parents=True, exist_ok=True)
 
     n = safe_filename(str(numero))
