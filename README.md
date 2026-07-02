@@ -61,19 +61,28 @@ Crie um arquivo `.env` na raiz do projeto. Esse arquivo não deve ser enviado ao
 Variáveis usadas pelo projeto:
 
 ```env
+- Credenciais de e-mail:
 EMAIL_USER=
 EMAIL_PASS=
+
+- Credenciais Bancárias:
+CERT_PATH=
+KEY_PATH=
 
 CLIENT_ID=
 CLIENT_SECRET=
 ACCOUNT_ID=
 
+- Credenciais Bancárias(Sandbox):
+CERT_SANDBOX=
+KEY_SANDBOX =
+
+- Credenciais de Banco de Dados:
 DB_USER=
 DB_PASS=
+DB_HOST=
 
-PORTO_USER=
-PORTO_PASS=
-AVERBE_COMP=5
+AVERB_PATH=
 ```
 
 Os certificados da API Inter devem existir localmente em:

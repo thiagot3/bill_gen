@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 class BillRepository:
-    """
+    '''
     Repositório para armazenar boletos gerados a partir de CT-e,
     contendo:
         - nCTe
@@ -16,7 +16,7 @@ class BillRepository:
         - dados do destinatário
         - valor do serviço
         - expiração automática
-    """
+    '''
 
     load_dotenv()
     def __init__(self,
@@ -42,7 +42,7 @@ class BillRepository:
 
 
     def _ensure_table_exists(self):
-        """
+        '''
         Cria a tabela `boletos` se ela não existir.
         Campos da Tabela:
             - id: Identificador único do registro (chave primária)
@@ -54,11 +54,11 @@ class BillRepository:
             - chave_cte: Chave de acesso do CT-e
             - created_at: Data e hora de criação do registro
             - expires_at: Data e hora de expiração do registro
-        """
+        '''
         query = """
         CREATE TABLE IF NOT EXISTS boletos (
             id SERIAL PRIMARY KEY,
-            ncte VARCHAR(20) NOT NULL UNIQUE,
+            ncte INTEGER NOT NULL UNIQUE,
             codigo_solicitacao VARCHAR(80) NOT NULL,
             dest VARCHAR(255) NOT NULL,
             dest_cnpj VARCHAR(20) NOT NULL,
@@ -88,7 +88,7 @@ class BillRepository:
 
 
     def save_table(self, dados: dict, cod_req: str, validade_dias: int = 60):
-        """
+        '''
         Salva ou atualiza os dados do boleto na tabela `boletos`.
 
         Parâmetros:
@@ -105,7 +105,7 @@ class BillRepository:
             validade_dias (int, opcional):
                 Quantidade de dias até a expiração e exclusão do registro.
                 Padrão: 60.
-        """
+        '''
 
         now = datetime.now()
         expires = now + timedelta(days=validade_dias)
@@ -146,9 +146,10 @@ class BillRepository:
 
 
     def get_code_by_ncte(self, n_cte: str):
-        """
+        '''
         Retorna um código válido (não expirado) para o CT-e.
-        """
+
+        '''
 
         query = """
         SELECT codigo_solicitacao
@@ -170,17 +171,20 @@ class BillRepository:
             return None
 
     def get_code_by_chcte(self, ch_cte: str):
-        """
+        '''
         Retorna um código válido (não expirado) para o CT-e.
-        """
 
-        query = """
+        Parâmetros:
+            ch_cte (str): Chave de acesso do CT-e.
+        '''
+
+        query = '''
         SELECT codigo_solicitacao
         FROM boletos
         WHERE chave_cte = %s
           AND expires_at > NOW()
         LIMIT 1;
-        """
+        '''
 
         try:
             with self._connect() as conn:
@@ -194,9 +198,9 @@ class BillRepository:
             return None
 
     def clean_expired(self):
-        """
+        '''
         Remove boletos cujo prazo expirou.
-        """
+        '''
         query = "DELETE FROM boletos WHERE expires_at <= NOW();"
 
         try:

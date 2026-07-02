@@ -43,7 +43,14 @@ EMAIL_USER = None
 EMAIL_PASS = None
 
 def _get_email_credentials() -> tuple[str, str]:
-    """Carrega e cacheia credenciais apenas quando forem necessarias."""
+    '''
+    Carrega e cacheia credenciais apenas quando forem necessarias.
+    
+    Returns:
+        tuple[str, str]: Credenciais de e-mail (usuário, senha).
+    Raises:
+        RuntimeError: Se EMAIL_USER ou EMAIL_PASS não estiverem definidos no .env.
+    '''
     global EMAIL_USER, EMAIL_PASS
 
     if not EMAIL_USER or not EMAIL_PASS:
@@ -58,7 +65,12 @@ def _get_email_credentials() -> tuple[str, str]:
 
 
 def _get_repo() -> BillRepository:
-    """Instancia o repositorio sob demanda para evitar conexao no import."""
+    '''
+    Instancia o repositorio sob demanda.
+    
+    Returns:
+        BillRepository: Instancia do repositório de faturas.
+    '''
     global repo
 
     if repo is None:
@@ -68,7 +80,14 @@ def _get_repo() -> BillRepository:
 
 
 def _get_mdfe_averbar_folder() -> Path:
-    """Carrega o caminho de averbacao do MDF-e apenas quando usado."""
+    '''
+    Carrega o caminho de averbacao do MDF-e apenas quando usado.
+    
+    Returns:
+        Path para a pasta de averbacao do MDF-e.
+    Raises:
+        RuntimeError: Se AVERB_PATH não estiver definido no .env.
+    '''
     global MDFE_AVERBAR_FOLDER
 
     if MDFE_AVERBAR_FOLDER is None:
@@ -83,15 +102,36 @@ def _get_mdfe_averbar_folder() -> Path:
 
 def safe_filename(value: str, max_len: int = 120) -> str:
     _INVALID_WIN = '<>:"/\\|?*\0'
+    '''
+    Sanitiza nomes de arquivos para evitar caracteres inválidos no Windows e limita o tamanho do nome.
+
+    Args:
+        value: Nome do arquivo a ser sanitizado.
+        max_len: Tamanho máximo do nome do arquivo.
+    Returns:
+        Nome do arquivo sanitizado.
+    '''
     value = (value or "").strip()
     value = "".join("_" if c in _INVALID_WIN else c for c in value)
     value = re.sub(r"\s+", " ", value)
     value = re.sub(r"[^\w .,\-()]+", "_", value)
     value = value.strip(" .")
+
     return value[:max_len] or "sem_nome"
 
 def send_mail_pdf(destinatario: str, assunto: str, corpo: str, pdf_bytes: bytes, nome_arquivo: str):
-    """Envia um e-mail com um arquivo PDF (em bytes) como anexo."""
+    '''
+    Envia um e-mail com um arquivo PDF (em bytes) como anexo.
+    
+    Args:
+        destinatario (str): Endereço de e-mail do destinatário.
+        assunto (str): Assunto do e-mail.
+        corpo (str): Corpo do e-mail.
+        pdf_bytes (bytes): Conteúdo do PDF a ser anexado.
+        nome_arquivo (str): Nome do arquivo PDF no anexo.
+    Raises:
+        Exception: Se ocorrer algum erro ao enviar o e-mail.
+    '''
 
 
     email_user, email_pass = _get_email_credentials()
@@ -120,7 +160,14 @@ def send_mail_pdf(destinatario: str, assunto: str, corpo: str, pdf_bytes: bytes,
         raise
 
 def _is_api_unavailable_error(error: Exception) -> bool:
-    """Identifica falhas que indicam indisponibilidade da API."""
+    '''
+    Identifica falhas que indicam indisponibilidade da API.
+    
+    Args:
+        error: Exceção capturada durante a chamada da API.
+    Returns:
+        True se a falha indica indisponibilidade da API, False caso contrário.
+    '''
     if isinstance(error, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
         return True
 
@@ -131,15 +178,15 @@ def _is_api_unavailable_error(error: Exception) -> bool:
     return False
 
 def _fetch_payload(imap, uid: bytes) -> Optional[bytes]:
-    """Busca o payload bruto do email via UID sem marcar como lido.
+    '''
+    Busca o payload bruto do email via UID sem marcar como lido.
 
     Args:
         imap: Conexão IMAP autenticada.
         uid: UID da mensagem.
-
     Returns:
         Bytes RFC822 do email ou None se falhar/sem payload.
-    """
+    '''
     status, data = imap.uid("fetch", uid, "(BODY.PEEK[])")
     if status != "OK" or not data:
         logger.warning("[WARNING] Falha ao fetch uid %r: %s %s", uid, status, data)
@@ -154,15 +201,15 @@ def _fetch_payload(imap, uid: bytes) -> Optional[bytes]:
 
 
 def _parse_email(payload: bytes, uid: bytes) -> EmailMessage | None:
-    """Converte bytes do email em um objeto Message.
+    '''
+    Converte bytes do email em um objeto Message.
 
     Args:
         payload: Bytes do email.
         uid: UID (para log).
-
     Returns:
         Message ou None se falhar.
-    """
+    '''
     try:
         msg = message_from_bytes(payload, policy=default)
         return msg if isinstance(msg, EmailMessage) else None
@@ -173,7 +220,7 @@ def _parse_email(payload: bytes, uid: bytes) -> EmailMessage | None:
 
 
 def _save_attachments(msg: EmailMessage, temp_dir: Path) -> tuple[Path | None, Path | None]:
-    """Salva o primeiro XML e o primeiro PDF do email no diretório temporário.
+    '''Salva o primeiro XML e o primeiro PDF do email no diretório temporário.
 
     Funciona para anexos enviados como `application/octet-stream` com `name=...`, 
     e também para anexos com filename normal.
@@ -181,10 +228,9 @@ def _save_attachments(msg: EmailMessage, temp_dir: Path) -> tuple[Path | None, P
     Args:
         msg: Email parseado (EmailMessage).
         temp_dir: Diretório para salvar anexos.
-
     Returns:
         (xml_path, pdf_path) como Path; podem ser None.
-    """
+    '''
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     xml_path: Path | None = None
@@ -224,7 +270,13 @@ def _save_attachments(msg: EmailMessage, temp_dir: Path) -> tuple[Path | None, P
     return xml_path, pdf_path
 
 def _mark_seen(imap, uid: bytes) -> None:
-    """Marca a mensagem como lida (\\Seen). Erros não interrompem o fluxo."""
+    '''
+    Marca a mensagem como lida (\\Seen).
+    
+    Args:
+        imap: Conexão IMAP autenticada.
+        uid: UID da mensagem a ser marcada.
+    '''
     try:
         imap.uid("store", uid, "+FLAGS", "(\\Seen)")
     except Exception as e:
@@ -232,7 +284,7 @@ def _mark_seen(imap, uid: bytes) -> None:
 
 
 def _keepalive(imap) -> None:
-    """Executa NOOP para manter a sessão IMAP viva."""
+    '''Executa NOOP para manter a sessão IMAP viva.'''
     try:
         imap.noop()
     except Exception:
@@ -248,7 +300,7 @@ def _archive_doc(
     nome: Optional[str] = None,
 
 ) -> Path:
-    """Move XML (e PDF, se existir) para o diretório definitivo.
+    '''Move XML (e PDF, se existir) para o diretório definitivo.
 
     Estrutura:
         data/documentos/<chave>/<kind>/<kind>_<numero>[_<nome>].(xml|pdf)
@@ -260,10 +312,9 @@ def _archive_doc(
         nome: Nome opcional para compor o arquivo.
         xml_path: Caminho do XML temporário.
         pdf_path: Caminho do PDF temporário (ou None).
-
     Returns:
         Diretório final criado/atualizado.
-    """
+    '''
     doc_dir = DOCUMENTS_FOLDER / safe_filename(chave) / safe_filename(kind)
     doc_dir.mkdir(parents=True, exist_ok=True)
 
@@ -281,32 +332,17 @@ def _archive_doc(
 
     return doc_dir
 
-
-def _copy_doc_to_archive(
-    kind: str,
-    chave: str,
-    numero: str,
-    xml_path: Path,
-    pdf_path: Path | None,
-    nome: Optional[str] = None,
-) -> Path:
-    """Copia XML/PDF para o diretorio definitivo sem consumir o temporario."""
-    doc_dir = DOCUMENTS_FOLDER / safe_filename(chave) / safe_filename(kind)
-    doc_dir.mkdir(parents=True, exist_ok=True)
-
-    n = safe_filename(str(numero))
-    nm = safe_filename(str(nome)) if nome else ""
-    base = f"{kind}_{n}" + (f"_{nm}" if nm else "")
-
-    copy2(xml_path, doc_dir / f"{base}.xml")
-    if pdf_path:
-        copy2(pdf_path, doc_dir / f"{base}.pdf")
-
-    return doc_dir
-
-
 def _save_boleto_pdf(dados: dict, pdf_bytes: bytes) -> Path:
-    """Salva o boleto do CT-e junto aos documentos ainda agrupados pelo CT-e."""
+    '''
+    Salva o boleto do CT-e junto aos documentos ainda agrupados pelo CT-e.
+    
+    Args:
+        dados (dict): Dados extraídos do CT-e.
+        pdf_bytes (bytes): Conteúdo do PDF do boleto.
+    
+    Returns:
+        Caminho do arquivo do boleto salvo.
+    '''
     boleto_dir = DOCUMENTS_FOLDER / safe_filename(str(dados["chCTe"])) / "Boleto"
     boleto_dir.mkdir(parents=True, exist_ok=True)
 
@@ -316,12 +352,12 @@ def _save_boleto_pdf(dados: dict, pdf_bytes: bytes) -> Path:
 
 
 def _merge_archive_root(source_root: Path, target_root: Path) -> None:
-    """
+    '''
     Move os arquivos de uma pasta provisoria para a raiz da pasta final da carga.
     Args:
         source_root: Pasta provisoria (ex: CT-e).
         target_root: Pasta final da carga (ex: Carga MDF-e).
-    """
+    '''
     if not source_root.exists() or source_root == target_root:
         return
 
@@ -360,13 +396,16 @@ def _merge_archive_root(source_root: Path, target_root: Path) -> None:
 
 
 def _archive_mdfe_carga(dados: dict, xml_path: Path, pdf_path: Path | None) -> Path:
-    """
+    '''
     Cria a pasta final da carga e junta CT-es, MDF-e e boletos relacionados.
     Args:
         dados: Dados extraídos do XML do MDF-e.
         xml_path: Caminho do XML do MDF-e.
         pdf_path: Caminho do PDF do MDF-e (ou None).
-    """
+    
+    Returns:
+        Caminho da pasta final da carga.
+    '''
     carga_root = DOCUMENTS_FOLDER / safe_filename(str(dados["chMDFe"]))
     carga_root.mkdir(parents=True, exist_ok=True)
 
@@ -388,14 +427,14 @@ def _archive_mdfe_carga(dados: dict, xml_path: Path, pdf_path: Path | None) -> P
 
 
 def _boleto_cte(dados: dict) -> None:
-    """Cria boleto do CT-e, salva no banco, baixa PDF e envia por email.
+    '''Cria boleto do CT-e, salva no banco, baixa PDF e envia por email.
 
     Args:
         dados: Dados extraídos do CT-e.
 
     Returns:
         None
-    """
+    '''
     try:
         logger.info("[INFO] Conectando à API...")
         bill_repo = _get_repo()
@@ -488,6 +527,12 @@ def _boleto_cte(dados: dict) -> None:
         logger.error("[ERROR] Falha na criação do boleto: %s", e)
 
 def _cancelar_boleto(dados):
+    '''
+    Cancela o boleto do CT-e, atualiza o banco e envia email de confirmação.
+    
+    Args:
+        dados (dict): Dados extraídos do XML de cancelamento do CT-e.
+    '''
     bill_repo = _get_repo()
 
     cod_req = bill_repo.get_code_by_chcte(dados["chCTe"])
@@ -510,7 +555,15 @@ def _cancelar_boleto(dados):
     logger.info("[OK] Boleto cancelado.")
 
 def processar_novo_cte(imap, uid: bytes) -> bool:
-    """Processa um email contendo CT-e (XML obrigatório, PDF opcional)."""
+    '''
+    Processa um email contendo CT-e (XML obrigatório, PDF opcional).
+    
+    Args:
+        imap: Conexão IMAP autenticada.
+        uid: UID do email a ser processado.
+    Returns:
+        True se o CT-e foi processado com sucesso, False caso contrário.
+    '''
     try:
         payload = _fetch_payload(imap, uid)
         if not payload:
@@ -569,7 +622,15 @@ def processar_novo_cte(imap, uid: bytes) -> bool:
 
 
 def processar_novo_mdfe(imap, uid: bytes) -> bool:
-    """Processa um email contendo MDF-e (XML obrigatório, PDF opcional)."""
+    '''
+    Processa um email contendo MDF-e (XML obrigatório, PDF opcional).
+    
+    Args:
+        imap: Conexão IMAP autenticada.
+        uid: UID do email a ser processado.
+    Returns:
+        True se o MDF-e foi processado com sucesso, False caso contrário.
+    '''
     try:
         payload = _fetch_payload(imap, uid)
         if not payload:
@@ -608,14 +669,14 @@ def processar_novo_mdfe(imap, uid: bytes) -> bool:
         return False
     
 def processar_cancelamento(imap, uid: bytes) -> bool:
-    """
+    '''
     Processa um email contendo XML de cancelamento de CT-e.
     Args:
         imap: Conexão IMAP autenticada.
         uid: UID do email a ser processado.
     Returns:
         True se o cancelamento foi processado com sucesso, False caso contrário.
-    """
+    '''
 
     try:
         payload = _fetch_payload(imap, uid)
@@ -661,10 +722,13 @@ def processar_cancelamento(imap, uid: bytes) -> bool:
     
 
 def monitorar_emails_polling(poll_interval: int = 15):
-    """
+    '''
     Polling: busca UNSEEN a cada poll_interval segundos.
     Processa backlog e novos emails.
-    """
+
+    Args:
+        poll_interval: Intervalo em segundos entre cada polling.
+    '''
     
     email_user, email_pass = _get_email_credentials()
     _get_repo()

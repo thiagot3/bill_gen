@@ -17,7 +17,32 @@ NS = {
 }
 
 def processar_cte(xml_path):
-    """Lê um arquivo XML de CT-e, extrai informações estruturadas e remove o arquivo após leitura."""
+    '''
+    Lê um arquivo XML de CT-e, extrai informações estruturadas e remove o arquivo após leitura.
+
+    Campos extraídos:
+        - nCTE: Número do CT-e.
+        - chCTe: Chave de acesso do CT-e.
+        - nome_rem: Nome do remetente.
+        - cnpj_dest: CNPJ do destinatário.
+        - nome_dest: Nome do destinatário.
+        - dest_logr: Logradouro do destinatário.
+        - dest_num: Número do endereço do destinatário.
+        - dest_dist: Bairro do destinatário.
+        - dest_city: Cidade do destinatário.
+        - dest_cep: CEP do destinatário.
+        - dest_UF: Unidade Federativa do destinatário.
+        - dest_comp: Complemento do endereço do destinatário.
+        - valor_servico: Valor do serviço de transporte.
+        - v_carga: Valor da carga transportada.
+        - produto_pred: Produto predominante da carga.
+        - chaves_nfe: Lista de dicionários com chaves e números de NF-e relacionadas.
+    Args:
+        xml_path (str | Path): Caminho para o arquivo XML do CT-e.
+    Returns:
+        dict: Dicionário com os campos extraídos, ou None se o XML for inválido ou não puder ser processado.
+    '''
+
     try:
         tree = ET.parse(xml_path)
         root = tree.getroot()
@@ -107,7 +132,8 @@ def processar_cte(xml_path):
         return None
 
 def processar_mdfe(xml_path: str | Path) -> dict[str, Any] | None:
-    """Extrai dados essenciais de um XML MDF-e (mdfeProc/MDFe).
+    '''
+    Extrai dados essenciais de um XML MDF-e (mdfeProc/MDFe).
 
     Campos retornados (principais para arquivamento):
         - chMDFe: chave do MDF-e (44 dígitos, preferindo infProt/chMDFe e caindo para infMDFe@Id)
@@ -123,10 +149,10 @@ def processar_mdfe(xml_path: str | Path) -> dict[str, Any] | None:
 
     Args:
         xml_path: Caminho do arquivo XML.
-
     Returns:
         Dict com os campos acima, ou None se não for MDF-e válido/parseável.
-    """
+    '''
+
     try:
         xml_path = Path(xml_path)
         root = ET.parse(xml_path).getroot()
@@ -205,7 +231,25 @@ def processar_mdfe(xml_path: str | Path) -> dict[str, Any] | None:
     }
 
 def processar_cancelamento_cte(xml_path):
-    """Extrai os dados necessários de um XML de cancelamento de CT-e."""
+    '''
+    Extrai os dados necessários de um XML de cancelamento de CT-e.
+
+    Campos extraídos:
+        - chCTe: Chave de acesso do CT-e cancelado.
+        - motivo: Motivo do cancelamento.
+    Campos verificados:    
+        - tpEvento: Tipo de evento (deve ser 110111 para cancelamento).
+        - cStat: Código de status do evento (deve ser 135, 136 ou 155 para cancelamento autorizado).
+        - xMotivo: Descrição do status do evento.
+
+    
+    Args:
+        xml_path (str | Path): Caminho para o arquivo XML do cancelamento de CT-e.
+
+    Returns:
+        dict: Dicionário com os campos extraídos, ou None se o XML for inválido ou não puder ser processado.
+    '''
+
 
     try:
         tree = ET.parse(xml_path)
@@ -250,7 +294,12 @@ def processar_cancelamento_cte(xml_path):
     
 
 def processar_todos_ctes():
-    """Processa todos os arquivos XML de CT-e na pasta XML_DIR e retorna lista de dicionários."""
+    '''
+    Processa todos os arquivos XML de CT-e na pasta XML_DIR e retorna lista de dicionários.
+
+    Returns:
+        list[dict]: Lista de dicionários com os dados extraídos de cada CT-e
+    '''
     resultados = []
 
     if not os.path.exists(XML_DIR):
