@@ -1,0 +1,59 @@
+# Ambiente e segredos
+.env
+.env.*
+!.env.example
+credentials/
+**/credentials/
+*.key
+*.pem
+*.pfx
+*.p12
+*.crt
+*.cer
+*.csr
+
+# Dados fiscais, documentos e anexos processados
+data/documentos/
+data/temp_XML Files/
+XML Files/
+*.xml
+*.pdf
+*.zip
+
+# Logs e arquivos de execucao
+bill_gen/logs/
+logs/
+*.log
+*.sqlite
+*.sqlite3
+*.db
+
+# Ambientes Python e caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Build, empacotamento e executaveis
+build/
+dist/
+*.spec
+*.exe
+
+# IDE e sistema operacional
+.vscode/settings.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Testes
+*.ipynb
+test_email.py
+src/test.py
+src/averbe_porto.py
