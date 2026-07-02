@@ -18,7 +18,6 @@ Automação em Python para monitorar emails de CT-e, MDF-e e cancelamentos, gera
 .
 ├── data/
 │   ├── db_bill.py
-│   └── Queries/
 ├── src/
 │   ├── bank_API.py
 │   ├── email_monitor.py
@@ -106,6 +105,3 @@ Nunca envie ao GitHub:
 - Certificados, chaves privadas ou arquivos `.crt`, `.key`, `.pem`, `.pfx`.
 - XMLs/PDFs de CT-e, MDF-e, boletos ou documentos fiscais reais.
 - Logs de execução.
-- Pastas `build/`, `dist/`, `.venv/` e executaveis gerados.
-
-Se algum segredo já tiver sido commitado antes, apenas colocar no `.gitignore` não remove do histórico. Nesse caso, revogue/rotacione as credenciais expostas e remova os arquivos rastreados com `git rm --cached`.
