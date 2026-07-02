@@ -17,7 +17,7 @@ Automação em Python para monitorar emails de CT-e, MDF-e e cancelamentos, gera
 ```text
 .
 ├── data/
-│   ├── db_bill.py
+│   └── db_bill.py
 ├── src/
 │   ├── bank_API.py
 │   ├── email_monitor.py
