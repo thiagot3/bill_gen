@@ -24,7 +24,12 @@ load_dotenv()
 account_id = os.getenv("ACCOUNT_ID")
 
 def connect_api():
-    """Obtém token da API do Banco Inter (reutiliza se ainda válido por até 60 min)."""
+    """
+    Obtém token da API do Banco Inter (reutiliza se ainda válido por até 60 min).
+    
+    Returns:
+        str: token de acesso válido.
+    """
     global _token_cache, _token_expiry
 
     agora = time.time()
@@ -72,6 +77,14 @@ def create_bill(token: str, dados: dict, dias_vencimento: int = 14) -> dict:
     """
     Cria boleto no Banco Inter a partir dos dados do CT-e.
     dias_vencimento: número de dias até vencimento (opcional, padrão = 14).
+    
+    Args:
+        token (str): token de acesso à API.
+        dados (dict): dicionário com informações do CT-e e destinatário.
+        dias_vencimento (int): número de dias até vencimento do boleto.
+    Returns:
+        dict: resposta da API com informações do boleto criado.
+    
     """
 
     # Validação obrigatória
@@ -118,7 +131,7 @@ def create_bill(token: str, dados: dict, dias_vencimento: int = 14) -> dict:
             "uf": dados.get("dest_UF", ""),
             "cep": dados.get("dest_cep", ""),
             "numero": dados.get("dest_num", ""),
-            "complemento": dados.get("dest_comp", ""),
+            "complemento": (dados.get("dest_comp") or "")[:30],
             "bairro": dados.get("dest_dist", ""),
             "email": dados.get("dest_email", ""),
             "ddd": dados.get("dest_ddd", ""),
@@ -151,8 +164,18 @@ def create_bill(token: str, dados: dict, dias_vencimento: int = 14) -> dict:
         )
         
     return data
+
 def get_bill_pdf(token: str, codReq: str) -> bytes:
-    """Obtém o PDF do boleto a partir do código de solicitação e retorna em bytes."""
+    """
+    Obtém o PDF do boleto a partir do código de solicitação e retorna em bytes.
+    
+    Args:
+        token (str): token de acesso à API.
+        codReq (str): código de solicitação do boleto.
+    
+    Returns:
+        bytes: conteúdo do PDF do boleto.
+    """
     if not codReq:
         raise ValueError("O código de solicitação é obrigatório")
 
@@ -174,6 +197,17 @@ def get_bill_pdf(token: str, codReq: str) -> bytes:
 
 
 def cancel_bill(token: str, codReq: str, motivo: str):
+    """
+    Cancela boleto no Banco Inter a partir do código de solicitação.
+    
+    Args:
+        token (str): token de acesso à API. 
+        codReq (str): código de solicitação do boleto.
+        motivo (str): motivo do cancelamento.
+    Returns:
+        int: status code da resposta da API.
+
+    """
     headers = {
         "Authorization": f"Bearer {token}",
         "x-conta-corrente": account_id,

@@ -1,5 +1,6 @@
 # src/email_monitor.py
 from __future__ import annotations
+import json
 import os
 import re
 from shutil import copy2, move
@@ -15,6 +16,7 @@ from email import message_from_bytes
 from email.message import EmailMessage
 from email.policy import default
 from pathlib import Path
+from pypdf import PdfWriter
 from data.db_bill import BillRepository
 from src.xml_reader import processar_cancelamento_cte, processar_cte, processar_mdfe
 from src.bank_API import cancel_bill, connect_api, create_bill, get_bill_pdf
@@ -27,6 +29,8 @@ load_dotenv()
 DOWNLOAD_FOLDER = Path(r"data\temp_XML Files")
 DOWNLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 DOCUMENTS_FOLDER = Path("data") / "documentos"
+MDFE_MANIFEST_FILENAME = "manifest.json"
+PDF_COMPILE_EMAIL_RECIPIENT = "thiagogambati@outlook.com"
 MDFE_AVERBAR_FOLDER = None
 
 BILL_PDF_MAX_ATTEMPTS = 5
@@ -285,7 +289,12 @@ def _mark_seen(imap, uid: bytes) -> None:
 
 
 def _keepalive(imap) -> None:
-    '''Executa NOOP para manter a sessão IMAP viva.'''
+    '''
+    Executa NOOP para manter a sessão IMAP viva.
+    
+    Args:
+        imap: Conexão IMAP autenticada.
+    '''
     try:
         imap.noop()
     except Exception:
@@ -396,23 +405,239 @@ def _merge_archive_root(source_root: Path, target_root: Path) -> None:
         pass
 
 
-def _archive_mdfe_carga(dados: dict, xml_path: Path, pdf_path: Path | None) -> Path:
+def _find_pdf_by_prefix(source_root: Path, prefix: str) -> Path | None:
     '''
-    Cria a pasta final da carga e junta CT-es, MDF-e e boletos relacionados.
+    Procura o primeiro arquivo PDF na pasta com o prefixo especificado.
+    
+    Args:
+        source_root: Pasta onde procurar.
+        prefix: Prefixo do arquivo PDF a ser procurado.
+    Returns:
+        Caminho do arquivo PDF encontrado ou None.
+    '''
+    for path in sorted(source_root.rglob(f"{prefix}*.pdf")):
+        if path.is_file():
+            return path
+    return None
+
+
+def _merge_pdf_files(pdf_paths: list[Path], output_path: Path) -> Path | None:
+    existing_paths = [path for path in pdf_paths if path.exists()]
+    missing_paths = [path for path in pdf_paths if not path.exists()]
+
+    for path in missing_paths:
+        logger.warning("[WARNING] PDF ausente ao montar arquivo juntado: %s", path)
+
+    if len(existing_paths) < 2:
+        logger.warning("[WARNING] PDFs insuficientes para gerar arquivo juntado em %s", output_path)
+        return None
+
+    writer = PdfWriter()
+    try:
+        for path in existing_paths:
+            writer.append(str(path))
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("wb") as output_file:
+            writer.write(output_file)
+    finally:
+        writer.close()
+
+    logger.info("[OK] PDFs da carga juntados em %s", output_path)
+    return output_path
+
+
+def _manifest_path(carga_root: Path) -> Path:
+    return carga_root / MDFE_MANIFEST_FILENAME
+
+
+def _build_mdfe_manifest(dados: dict) -> dict:
+    return {
+        "chMDFe": str(dados["chMDFe"]),
+        "nMDFE": str(dados["nMDFE"]),
+        "uf_ini": dados.get("uf_ini"),
+        "uf_fim": dados.get("uf_fim"),
+        "chCTes": [str(chave_cte) for chave_cte in dados.get("chCTes") or []],
+        "ctes_recebidos": [],
+        "boletos_recebidos": [],
+        "arquivos_cte": {},
+    }
+
+
+def _load_mdfe_manifest(manifest_path: Path) -> dict | None:
+    try:
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except Exception as e:
+        logger.warning("[WARNING] Falha ao ler manifesto MDF-e %s: %s", manifest_path, e)
+        return None
+
+
+def _save_mdfe_manifest(carga_root: Path, manifest: dict) -> Path:
+    manifest_path = _manifest_path(carga_root)
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return manifest_path
+
+
+def _iter_pending_mdfe_manifests():
+    if not DOCUMENTS_FOLDER.exists():
+        return
+
+    yield from DOCUMENTS_FOLDER.rglob(MDFE_MANIFEST_FILENAME)
+
+
+def _append_unique(values: list, value: str) -> None:
+    if value not in values:
+        values.append(value)
+
+
+def _mark_cte_in_manifest(
+    manifest: dict,
+    chave_cte: str,
+    cte_recebido: bool,
+    cte_pdf: Path | None,
+    boleto_pdf: Path | None,
+) -> None:
+    chave_cte = str(chave_cte)
+    arquivos_cte = manifest.setdefault("arquivos_cte", {})
+    cte_entry = arquivos_cte.setdefault(chave_cte, {})
+
+    if cte_recebido:
+        _append_unique(manifest.setdefault("ctes_recebidos", []), chave_cte)
+
+    if cte_pdf:
+        cte_entry["cte_pdf"] = cte_pdf.name
+
+    if boleto_pdf:
+        _append_unique(manifest.setdefault("boletos_recebidos", []), chave_cte)
+        cte_entry["boleto_pdf"] = boleto_pdf.name
+
+
+def _missing_mdfe_manifest_items(manifest: dict) -> tuple[list[str], list[str]]:
+    expected_ctes = [str(chave_cte) for chave_cte in manifest.get("chCTes") or []]
+    received_ctes = {str(chave_cte) for chave_cte in manifest.get("ctes_recebidos") or []}
+    received_boletos = {str(chave_cte) for chave_cte in manifest.get("boletos_recebidos") or []}
+
+    missing_ctes = [chave_cte for chave_cte in expected_ctes if chave_cte not in received_ctes]
+    missing_boletos = [chave_cte for chave_cte in expected_ctes if chave_cte not in received_boletos]
+
+    return missing_ctes, missing_boletos
+
+
+def _compiled_mdfe_pdf_path(carga_root: Path, manifest: dict) -> Path:
+    chave_mdfe = safe_filename(str(manifest.get("chMDFe") or carga_root.name))
+    return carga_root / f"MDFe{chave_mdfe}.pdf"
+
+
+def _ordered_pdf_paths_for_manifest(carga_root: Path, manifest: dict) -> list[Path]:
+    mdfe_pdf = _find_pdf_by_prefix(carga_root, "MDFe_")
+    if not mdfe_pdf:
+        logger.warning("[WARNING] PDF do MDF-e ausente para compilar carga em %s", carga_root)
+        return []
+
+    pdf_paths = [mdfe_pdf]
+    arquivos_cte = manifest.get("arquivos_cte") or {}
+
+    for chave_cte in manifest.get("chCTes") or []:
+        cte_files = arquivos_cte.get(str(chave_cte)) or {}
+        cte_pdf_name = cte_files.get("cte_pdf")
+        boleto_pdf_name = cte_files.get("boleto_pdf")
+
+        if cte_pdf_name:
+            pdf_paths.append(carga_root / cte_pdf_name)
+        if boleto_pdf_name:
+            pdf_paths.append(carga_root / boleto_pdf_name)
+
+    return pdf_paths
+
+
+def _send_compiled_mdfe_pdf(manifest: dict, merged_pdf_path: Path) -> None:
+    send_mail_pdf(
+        PDF_COMPILE_EMAIL_RECIPIENT,
+        assunto=(
+            f"Documentos compilados do MDF-e {manifest.get('nMDFE')} "
+            f"({manifest.get('uf_ini')} -> {manifest.get('uf_fim')})"
+        ),
+        corpo=(
+            "Segue em anexo o arquivo compilado com MDF-e, CT-es "
+            "e boletos relacionados."
+        ),
+        pdf_bytes=merged_pdf_path.read_bytes(),
+        nome_arquivo=merged_pdf_path.name,
+    )
+
+
+def _try_finalize_mdfe_carga(carga_root: Path, manifest: dict) -> Path | None:
+    missing_ctes, missing_boletos = _missing_mdfe_manifest_items(manifest)
+
+    if missing_ctes or missing_boletos:
+        _save_mdfe_manifest(carga_root, manifest)
+        logger.info(
+            "[INFO] Carga MDF-e %s pendente. CT-es faltantes: %s. Boletos faltantes: %s",
+            manifest.get("nMDFE"),
+            missing_ctes or "nenhum",
+            missing_boletos or "nenhum",
+        )
+        return None
+
+    pdf_paths = _ordered_pdf_paths_for_manifest(carga_root, manifest)
+    merged_pdf_path = _merge_pdf_files(pdf_paths, _compiled_mdfe_pdf_path(carga_root, manifest))
+    if not merged_pdf_path:
+        _save_mdfe_manifest(carga_root, manifest)
+        return None
+
+    try:
+        _send_compiled_mdfe_pdf(manifest, merged_pdf_path)
+    except Exception as e:
+        manifest["ultimo_erro_envio"] = str(e)
+        _save_mdfe_manifest(carga_root, manifest)
+        logger.exception(
+            "[ERROR] PDF compilado do MDF-e %s foi gerado, mas nao enviado por email: %s",
+            manifest.get("nMDFE"),
+            e,
+        )
+        return None
+
+    manifest_path = _manifest_path(carga_root)
+    if manifest_path.exists():
+        manifest_path.unlink()
+        logger.info("[OK] Manifesto temporario removido apos finalizacao da carga: %s", manifest_path)
+
+    return merged_pdf_path
+
+
+def _archive_mdfe_carga(dados: dict, xml_path: Path, pdf_path: Path | None) -> tuple[Path, Path | None]:
+    '''
+    Cria a pasta final da carga e tenta juntar CT-es, MDF-e e boletos relacionados.
+    Se ainda faltar algum CT-e/boleto, mantém um manifesto temporário para concluir depois.
     Args:
         dados: Dados extraídos do XML do MDF-e.
         xml_path: Caminho do XML do MDF-e.
         pdf_path: Caminho do PDF do MDF-e (ou None).
-    
+
     Returns:
-        Caminho da pasta final da carga.
+        Tupla com o caminho da pasta final da carga e o caminho do PDF juntado/enviado,
+        quando a carga estiver completa.
     '''
     carga_root = DOCUMENTS_FOLDER / safe_filename(str(dados["chMDFe"]))
     carga_root.mkdir(parents=True, exist_ok=True)
 
-    for chave_cte in dados.get("chCTes") or []:
+    manifest = _build_mdfe_manifest(dados)
+
+    for chave_cte in manifest.get("chCTes") or []:
         cte_root = DOCUMENTS_FOLDER / safe_filename(str(chave_cte))
+        cte_recebido = cte_root.exists()
+        cte_pdf = _find_pdf_by_prefix(cte_root, "CTe_")
+        boleto_pdf = _find_pdf_by_prefix(cte_root, "Boleto_")
         _merge_archive_root(cte_root, carga_root)
+
+        moved_cte_pdf = carga_root / cte_pdf.name if cte_pdf else None
+        moved_boleto_pdf = carga_root / boleto_pdf.name if boleto_pdf else None
+        _mark_cte_in_manifest(manifest, str(chave_cte), cte_recebido, moved_cte_pdf, moved_boleto_pdf)
 
     n_mdfe = safe_filename(str(dados["nMDFE"]))
     xml_filename = f"MDFe_{n_mdfe}.xml"
@@ -421,20 +646,65 @@ def _archive_mdfe_carga(dados: dict, xml_path: Path, pdf_path: Path | None) -> P
     copy2(xml_path, mdfe_averbar_folder / xml_filename)
     logger.info("[OK] XML do MDF-e salvo para averbação em %s", mdfe_averbar_folder / xml_filename)
     xml_path.replace(carga_root / xml_filename)
+
     if pdf_path:
-        pdf_path.replace(carga_root / f"MDFe_{n_mdfe}.pdf")
+        mdfe_pdf_path = carga_root / f"MDFe_{n_mdfe}.pdf"
+        pdf_path.replace(mdfe_pdf_path)
 
-    return carga_root
+    return carga_root, _try_finalize_mdfe_carga(carga_root, manifest)
 
 
-def _boleto_cte(dados: dict) -> None:
+def _reconcile_cte_with_pending_mdfe(dados: dict) -> Path | None:
+    chave_cte = str(dados["chCTe"])
+    cte_root = DOCUMENTS_FOLDER / safe_filename(chave_cte)
+    reconciled_pdf_path: Path | None = None
+    found_manifest = False
+
+    for manifest_path in list(_iter_pending_mdfe_manifests()):
+        carga_root = manifest_path.parent
+        manifest = _load_mdfe_manifest(manifest_path)
+        if not manifest or chave_cte not in [str(chave) for chave in manifest.get("chCTes") or []]:
+            continue
+
+        found_manifest = True
+        cte_pdf = _find_pdf_by_prefix(cte_root, "CTe_")
+        boleto_pdf = _find_pdf_by_prefix(cte_root, "Boleto_")
+
+        if cte_root.exists():
+            _merge_archive_root(cte_root, carga_root)
+            moved_cte_pdf = carga_root / cte_pdf.name if cte_pdf else None
+            moved_boleto_pdf = carga_root / boleto_pdf.name if boleto_pdf else None
+            _mark_cte_in_manifest(manifest, chave_cte, True, moved_cte_pdf, moved_boleto_pdf)
+            logger.info(
+                "[OK] CT-e %s vinculado a carga MDF-e %s",
+                dados.get("nCTE"),
+                manifest.get("nMDFE"),
+            )
+        else:
+            logger.warning(
+                "[WARNING] Manifesto MDF-e %s referencia CT-e %s, mas a pasta do CT-e nao existe: %s",
+                manifest.get("nMDFE"),
+                chave_cte,
+                cte_root,
+            )
+
+        finalized_pdf_path = _try_finalize_mdfe_carga(carga_root, manifest)
+        if finalized_pdf_path:
+            reconciled_pdf_path = finalized_pdf_path
+
+    if not found_manifest:
+        logger.info("[INFO] Nenhuma carga MDF-e pendente encontrada para o CT-e %s", dados.get("nCTE"))
+
+    return reconciled_pdf_path
+
+def _boleto_cte(dados: dict) -> Path | None:
     '''Cria boleto do CT-e, salva no banco, baixa PDF e envia por email.
 
     Args:
         dados: Dados extraídos do CT-e.
 
     Returns:
-        None
+        Caminho do PDF do boleto salvo quando o envio for concluído; None em caso de falha.
     '''
     try:
         logger.info("[INFO] Conectando à API...")
@@ -451,6 +721,7 @@ def _boleto_cte(dados: dict) -> None:
         bill_repo.save_table(dados, cod_req=cod_req)
         bill_repo.clean_expired()
 
+        boleto_path: Path | None = None
         boleto_enviado = False
 
         for attempt in range(1, BILL_PDF_MAX_ATTEMPTS + 1):
@@ -468,7 +739,7 @@ def _boleto_cte(dados: dict) -> None:
                 logger.info("[OK] Boleto salvo em %s", boleto_path)
 
                 send_mail_pdf(
-                    "thiagogambati@outlook.com",
+                    PDF_COMPILE_EMAIL_RECIPIENT,
                     assunto=(
                         f"Boleto referente ao CT-e {dados['nCTE']}, "
                         f"para: {dados['nome_dest']} CNPJ: {dados['cnpj_dest']}"
@@ -523,10 +794,13 @@ def _boleto_cte(dados: dict) -> None:
                 "[ERROR] Boleto do CT-e %s não foi enviado por email.",
                 dados.get("nCTE"),
             )
+            return None
+
+        return boleto_path
 
     except Exception as e:
-        logger.error("[ERROR] Falha na criação do boleto: %s", e)
-
+        logger.exception("[ERROR] Falha na criação do boleto: %s", e)
+        return None
 def _cancelar_boleto(dados):
     '''
     Cancela o boleto do CT-e, atualiza o banco e envia email de confirmação.
@@ -612,7 +886,9 @@ def processar_novo_cte(imap, uid: bytes) -> bool:
 
         _mark_seen(imap, uid)
 
-        _boleto_cte(dados)
+        boleto_path = _boleto_cte(dados)
+        if boleto_path:
+            _reconcile_cte_with_pending_mdfe(dados)
 
         _keepalive(imap)
         return True
@@ -653,9 +929,16 @@ def processar_novo_mdfe(imap, uid: bytes) -> bool:
             logger.error("[ERROR] XML inválido, descartando email")
             return False
         
-        doc_dir = _archive_mdfe_carga(dados, xml_path, pdf_path)
+        doc_dir, merged_pdf_path = _archive_mdfe_carga(dados, xml_path, pdf_path)
         logger.info("[OK] Carga MDF-e arquivada em %s", doc_dir)
 
+        if merged_pdf_path:
+            logger.info("[OK] PDF compilado do MDF-e enviado: %s", merged_pdf_path)
+        else:
+            logger.info(
+                "[INFO] Carga MDF-e %s aguardando CT-es/boletos para envio do PDF compilado.",
+                dados.get("nMDFE"),
+            )
         if pdf_path:
             logger.info("[OK] PDF do MDF-e arquivado")
         else:
@@ -765,17 +1048,17 @@ def monitorar_emails_polling(poll_interval: int = 15):
                                 ok = processar_novo_cte(mail, uid)
 
                                 if ok:
-                                    logger.info("[OK] Email de cancelamento processado com sucesso (UID %r).", uid)
+                                    logger.info("[OK] Email de CT-e processado com sucesso (UID %r).", uid)
                                 else:
                                     logger.info(
-                                        "[INFO] Email de cancelamento UID %r ignorado "
+                                        "[INFO] Email de CT-e UID %r ignorado "
                                         "(sem XML válido ou não aplicável).",
                                         uid
                                     )
 
                             except Exception as e:
                                 logger.exception(
-                                    "[ERROR] Erro não tratado ao processar cancelamento UID %r: %s",
+                                    "[ERROR] Erro não tratado ao processar CT-e UID %r: %s",
                                     uid, e
                                 )
 

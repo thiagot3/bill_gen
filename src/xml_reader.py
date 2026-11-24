@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Optional
 import xml.etree.ElementTree as ET
 
+from numpy import inf
+
 logger = logging.getLogger(__name__)
 # Diretório onde os arquivos XML são armazenados
 XML_DIR = "XML Files"
@@ -22,7 +24,8 @@ def processar_cte(xml_path):
 
     Campos extraídos:
         - nCTE: Número do CT-e.
-        - chCTe: Chave de acesso do CT-e.
+        - chCTe: Chave de acesso do CT-e atual/autorizado.
+        - chCTe_relacionado: Chave do CT-e originário/complementado, quando existir.
         - nome_rem: Nome do remetente.
         - cnpj_dest: CNPJ do destinatário.
         - nome_dest: Nome do destinatário.
@@ -51,9 +54,25 @@ def processar_cte(xml_path):
         ide = root.find('.//cte:ide', NS)
         nCTE = ide.find('cte:nCT', NS).text if ide is not None else None
 
-        #Chave do CTe
-        chCTe = root.find('.//cte:chCTe', NS)
-        chCTe = chCTe.text if chCTe is not None else None
+        # Chave própria do CT-e atual.
+        # Em CT-e complementar, existe outro <chCTe> dentro de <infCteComp>,
+        # que aponta para o CT-e originário. Por isso não devemos usar
+        # root.find('.//cte:chCTe'), pois ele pode pegar a chave relacionada.
+        chCTe_node = root.find('.//cte:protCTe/cte:infProt/cte:chCTe', NS)
+        chCTe = chCTe_node.text.strip() if chCTe_node is not None and chCTe_node.text else None
+
+        if not chCTe:
+            inf_cte = root.find('.//cte:infCte', NS)
+            inf_cte_id = (inf_cte.attrib.get('Id') or '').strip() if inf_cte is not None else ''
+            if inf_cte_id.startswith('CTe'):
+                chCTe = inf_cte_id.replace('CTe', '', 1).strip() or None
+
+        chCTe_relacionado_node = root.find('.//cte:infCteComp/cte:chCTe', NS)
+        chCTe_relacionado = (
+            chCTe_relacionado_node.text.strip()
+            if chCTe_relacionado_node is not None and chCTe_relacionado_node.text
+            else None
+        )
         
         # Remetente
         rem = root.find('.//cte:rem', NS)
@@ -93,15 +112,16 @@ def processar_cte(xml_path):
                 chaves_nfe.append({"chave": chave, "numero_nf": numero_nf})
 
         # Validação obrigatória
-        if not nCTE or not dest_cnpj or not dest_nome:
+        if not nCTE or not chCTe or not dest_cnpj or not dest_nome:
             raise ValueError(
                 f"CT-e inválido: campos obrigatórios ausentes "
-                f"(nCTE={nCTE}, cnpj_dest={dest_cnpj}, nome_dest={dest_nome})"
+                f"(nCTE={nCTE}, chCTe={chCTe}, cnpj_dest={dest_cnpj}, nome_dest={dest_nome})"
             )
 
         dados = {
             "nCTE": nCTE,
             "chCTe": chCTe,
+            "chCTe_relacionado": chCTe_relacionado,
             "nome_rem": nome_rem,
             "cnpj_dest": dest_cnpj,
             "nome_dest": dest_nome,
@@ -183,7 +203,7 @@ def processar_mdfe(xml_path: str | Path) -> dict[str, Any] | None:
         return val or None
 
     # Preferir chave do protocolo (quando existe mdfeProc com protMDFe)
-    ch_mdfe = _text(root, ".//proc:protMDFe/proc:infProt/proc:chCTe")
+    ch_mdfe = _text(root, ".//proc:protMDFe/proc:infProt/proc:chMDFe")
     if not ch_mdfe:
         # Fallback: atributo Id do infMDFe (formato "MDFe<chave>")
         inf_id = (inf.attrib.get("Id") or "").strip()
@@ -209,6 +229,10 @@ def processar_mdfe(xml_path: str | Path) -> dict[str, Any] | None:
     cstat = _text(root, ".//proc:protMDFe/proc:infProt/proc:cStat")
     xmotivo = _text(root, ".//proc:protMDFe/proc:infProt/proc:xMotivo")
 
+    placa_tracao = _text(inf, ".//mdfe:infModal/mdfe:rodo/mdfe:veicTracao/mdfe:placa")
+    nome_condutor = _text(inf, ".//mdfe:infModal/mdfe:rodo/mdfe:veicTracao/mdfe:condutor/mdfe:xNome")
+    placa_reboque = _text(inf, ".//mdfe:infModal/mdfe:rodo/mdfe:veicReboque/mdfe:placa")
+
     if not ch_mdfe or not n_mdf:
         logger.error(
             "[ERROR] MDF-e sem campos essenciais (chMDFe=%r, nMDF=%r) em %s",
@@ -228,6 +252,9 @@ def processar_mdfe(xml_path: str | Path) -> dict[str, Any] | None:
         "nprot": nprot,
         "cstat": cstat,
         "xmotivo": xmotivo,
+        "placa_tracao": placa_tracao,
+        "nome_condutor": nome_condutor,
+        "placa_reboque": placa_reboque,
     }
 
 def processar_cancelamento_cte(xml_path):
